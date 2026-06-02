@@ -452,6 +452,72 @@ def nlp_query(request: QueryRequest, db: Session = Depends(get_db)):
     
     start_time = datetime.utcnow()
     
+    # QUICK CHECK: Look for order keywords directly
+    question_lower = request.question.lower()
+    order_keywords = ["order", "reorder", "request", "arrange", "book", "schedule", "get", "repeat", "remake", "redo", "need"]
+    xray_keywords = ["xray", "x-ray", "x ray", "chest x", "radiograph"]
+    
+    is_quick_order = False
+    order_type = None
+    
+    # Quick detect: order keyword + type
+    if any(kw in question_lower for kw in order_keywords):
+        if any(kw in question_lower for kw in xray_keywords):
+            is_quick_order = True
+            order_type = "xray"
+        elif "blood" in question_lower:
+            is_quick_order = True
+            order_type = "blood_work"
+        elif "ct" in question_lower:
+            is_quick_order = True
+            order_type = "ct_scan"
+        elif "ultrasound" in question_lower or "echo" in question_lower:
+            is_quick_order = True
+            order_type = "ultrasound"
+        elif "mri" in question_lower:
+            is_quick_order = True
+            order_type = "mri"
+        elif "ecg" in question_lower or "ekg" in question_lower:
+            is_quick_order = True
+            order_type = "ecg"
+        elif "cardiology" in question_lower or "cardiologist" in question_lower:
+            is_quick_order = True
+            order_type = "cardiology_consult"
+    
+    # If quick detect found an order, create it immediately
+    if is_quick_order and order_type:
+        order_id = str(__import__('uuid').uuid4())
+        try:
+            from sqlalchemy import text
+            insert_query = text("""
+                INSERT INTO orders (id, patient_id, order_type, description, requested_by, status, created_at)
+                VALUES (:id, :patient_id, :order_type, :description, :requested_by, :status, :created_at)
+            """)
+            
+            db.execute(insert_query, {
+                "id": order_id,
+                "patient_id": request.patient_id,
+                "order_type": order_type,
+                "description": request.question,
+                "requested_by": "AI Assistant",
+                "status": "pending",
+                "created_at": datetime.utcnow()
+            })
+            db.commit()
+            
+            execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            return QueryResponse(
+                patient_id=request.patient_id,
+                question=request.question,
+                intent={"type": "order", "order_type": order_type},
+                structured_data={"order_id": order_id, "status": "PENDING"},
+                narrative_summary=f"✅ ORDER CREATED: {order_type.replace('_', ' ').title()}\n\nOrder ID: {order_id}\nStatus: PENDING - Awaiting approval",
+                execution_time_ms=execution_time
+            )
+        except Exception as e:
+            print(f"Error creating order: {e}")
+            pass  # Fall through to regular query
+    
     # STEP 1: Check if this is an ORDER request (before intent extraction)
     order_result = create_order_from_request(request.patient_id, request.question, db)
     

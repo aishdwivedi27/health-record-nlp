@@ -1,8 +1,8 @@
 import json
 import os
+import re
 from pathlib import Path
 
-# Cached system prompt (loaded once at startup)
 _cached_system_prompt = None
 
 def load_system_prompt():
@@ -18,7 +18,7 @@ def load_system_prompt():
             _cached_system_prompt = json.load(f)
         return _cached_system_prompt
     except FileNotFoundError:
-        raise FileError(f"System prompt not found at {prompt_path}")
+        raise FileNotFoundError(f"System prompt not found at {prompt_path}")
 
 def get_system_instructions():
     """Get system instructions text"""
@@ -26,28 +26,28 @@ def get_system_instructions():
     return prompt["system_instructions"]
 
 def get_keywords():
-    """Get keyword mappings for order/latest detection"""
+    """Get keyword mappings"""
     prompt = load_system_prompt()
     return prompt["keywords"]
 
 def get_examples():
-    """Get examples for Claude context (for prompt caching)"""
+    """Get examples for prompt"""
     prompt = load_system_prompt()
     return prompt["examples"]
 
 def detect_order_request(question: str) -> dict:
-    """Detect if user is requesting an order"""
+    """Detect if user is requesting an order - uses word boundary matching"""
     keywords = get_keywords()
     order_keywords = keywords["order_actions"]
     order_types_map = keywords["order_types"]
     
     question_lower = question.lower()
     
-    # Check if order keywords present (word boundary matching)
+    # Word boundary matching: "order" matches "order xray" but not "disorder"
     is_order = False
     for kw in order_keywords:
-        # Match whole words, not substrings
-        if f" {kw} " in f" {question_lower} " or question_lower.startswith(kw) or question_lower.endswith(kw):
+        pattern = rf'\b{kw}\b'  # Word boundary regex
+        if re.search(pattern, question_lower):
             is_order = True
             break
     
@@ -68,7 +68,7 @@ def detect_order_request(question: str) -> dict:
     }
 
 def detect_latest_query(question: str) -> bool:
-    """Detect if user is asking about 'latest' across data types"""
+    """Detect if user is asking about 'latest' anything"""
     keywords = get_keywords()
     latest_indicators = keywords["latest_indicators"]
     
@@ -76,15 +76,13 @@ def detect_latest_query(question: str) -> bool:
     return any(indicator in question_lower for indicator in latest_indicators)
 
 def build_system_prompt_for_claude():
-    """Build system prompt with examples for Claude API (with caching support)"""
+    """Build system prompt with examples for Claude API"""
     instructions = get_system_instructions()
     examples = get_examples()
     
-    # Build prompt with examples for better context
     example_text = "\n\nExamples:\n"
     for ex in examples:
         example_text += f"\nUser: '{ex['user']}'\nLogic: {ex['logic']}\nResponse: {ex['response']}"
     
     full_prompt = instructions + example_text
-    
     return full_prompt
